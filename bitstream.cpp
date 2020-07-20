@@ -1,58 +1,82 @@
 #include "bitstream.h"
 #include <stdio.h>
 
-#define RESIDUE() (length-headresidue)%BYTE_SIZE
+int bitstream::RESIDUE() {
+	return (length-headresidue)%BYTE_SIZE;
+}
 
 BYTE safemask(int len){
 	return BYTE_FULL>>(BYTE_SIZE-len);
 }
 
-void partial_full_Copy(BYTE* low,BYTE* high,int lresidue){
-	BYTE d=*high;
-	*(low)=(d << lresidue)+*(low);
-	*high= (d >>(BYTE_SIZE-lresidue)) & safemask(lresidue);
+BYTE lsb_as_lsb(BYTE* b,int len){
+	return *b & safemask(len);
+}
+BYTE shiftout_lsb(BYTE* b,int len){
+	return (*b>>len) & safemask(BYTE_SIZE-len);
 }
 
-void bitstream::align(){
+BYTE shift_for_residue(BYTE* b,int residue){
+	return *b << residue;
+}
+BYTE overflown_in_residue(BYTE* b,int residue){
+	return (*b>>(BYTE_SIZE-residue)) & safemask(residue);
+}
+
+BYTE lsb_shift_residue(BYTE* b,int len,int residue){
+	return (*b & safemask(len))<< residue;
+}
+
+// empty(0)<Partial<full(BYTE_SIZE) (strictly)
+//Ensure low is partially filled AND high is fully filled
+void partial_full_Copy(BYTE* low,BYTE* high,int lresidue){
+	*low=shift_for_residue(high,lresidue)+ *low;
+	*high=overflown_in_residue(high,lresidue);
+}
+//Ensure both are partial. Returns true if higher byte is required
+int partial_partial_Copy(BYTE* low,BYTE* high,int lresidue,int hresidue){
+	partial_full_Copy(low,high,lresidue);
+	return (lresidue+hresidue>BYTE_SIZE);
+}
+
+int bitstream::isAligned(){
+	return !(RESIDUE() && length>BYTE_SIZE);
+}
+void bitstream::bareAlign(){
 	int residue=RESIDUE();
-	if(residue){
-		int lresidue=headresidue;
-		if(headresidue==0)
-			headresidue=BYTE_SIZE;
-		BYTE llast = *tail;
-		if(residue+headresidue>BYTE_SIZE)
-		{
-			BYTE d=*head;
-			headresidue=residue+headresidue-BYTE_SIZE;
-			lresidue=BYTE_SIZE-residue;
-			dec_head();
-			*head=d & safemask(headresidue);
-			inc_head();
-			*head=(d >> headresidue) & safemask(BYTE_SIZE-headresidue);
-			dec_tail();
-		}
-		if(head>tail){
-			for(BYTE* i=next(head);i<=last;i++)
-				partial_full_Copy(pre(i),i,lresidue);
-			for(BYTE* i=stream;i<=tail;i++)
-				partial_full_Copy(pre(i),i,lresidue);
-		}
-		else if(head<tail)
-			for(BYTE* i=head+1;i<=tail;i++)
-				partial_full_Copy(i-1,i,lresidue);
-		if(lresidue!=headresidue){
-			dec_head();
-			partial_full_Copy(tail,&llast,lresidue);
-			inc_tail();
-			if(llast!=0)
-				throw "2 Days of algorithm design gone down the gutter";
-		}
-		else
-			headresidue=lresidue+residue;
+	int lresidue=headresidue;
+	if(headresidue==0)
+		headresidue=BYTE_SIZE;
+	BYTE llast = *tail;
+	if(residue+headresidue>BYTE_SIZE)
+	{
+		BYTE d=*head;
+		headresidue=residue+headresidue-BYTE_SIZE;
+		lresidue=BYTE_SIZE-residue;
+		*pre(head)=lsb_as_lsb(head,headresidue);
+		*head=shiftout_lsb(head,headresidue);
+		dec_tail();
 	}
+
+	BYTE* stop=next(tail);
+	for(BYTE* i=next(head);i!=stop;i=next(i))
+			partial_full_Copy(pre(i),i,lresidue);//If tail is not full then headresidue+residue<=BYTE_SIZE , so the result of partial_partial_copy will be false is known in advance hence partal_full_copy works in that case too
+	if(lresidue!=headresidue){
+		dec_head();
+		if(partial_partial_Copy(tail,&llast,lresidue,residue))
+			throw "Algoithmic error";
+		inc_tail();
+	}
+	else
+		headresidue=lresidue+residue;
+}
+void bitstream::align(){
+	if(!isAligned())
+		bareAlign();
 	else 
 		throw "Already aligned!!";	
 }
+
 void bitstream::aligned_copy(BYTE* dst){
 	int num=LEN_BYTE_IN(length-headresidue)+1+(headresidue>0);
 	if(head>=tail)
@@ -65,7 +89,7 @@ void bitstream::aligned_copy(BYTE* dst){
 	head=dst;
 	tail=head+num;
 }
-
+//Assumes trivialWrite failed
 void  bitstream::resize(int len){
 	if(LEN_BYTE_IN(len+length-headresidue)+(headresidue>0) >LEN_BYTE_IN(capacity)){
 		int residue=RESIDUE();
@@ -86,6 +110,11 @@ void bitstream::inc_tail(){
 	else
 		tail++;
 }
+void bitstream::dec_tail(){
+	if(tail==stream)
+		tail=last;
+	else tail--;
+}
 
 void bitstream::inc_head(){
 	if(head==last)
@@ -93,16 +122,10 @@ void bitstream::inc_head(){
 	else
 		head++;
 }
-
 void bitstream::dec_head(){
 	if(head==stream)
 		head=last;
 	else head--;
-}
-void bitstream::dec_tail(){
-	if(tail==stream)
-		tail=last;
-	else tail--;
 }
 
 BYTE* bitstream::pre(BYTE* b){
@@ -115,57 +138,81 @@ BYTE* bitstream::next(BYTE* b){
 		return stream;
 	return b+1;
 }
-/*void bitstream::partialFetch(BYTE* &buf,int residue, int &len){
-	BYTE b=*(buf++);
-	length+=(len>BYTE_SIZE)?BYTE_SIZE:len;
-	len-=BYTE_SIZE;
-	*tail=((*tail)& safemask(residue))+(b<<residue);
-	if(len>=-1*residue)
-	{
-		inc_tail();
-		*tail=b>>(BYTE_SIZE-residue);
+
+#define READ 1
+#define WRITE 0
+BYTE* bitstream::alignedIterate(BYTE* dst,int n,int read){
+	BYTE* ltail,*lhead;
+	if(read==READ){
+		ltail=head;
+		lhead=tail;
 	}
-}*/
+	else{
+		ltail=tail;
+		lhead=head;
+	}
+	if(ltail<lhead || last-ltail>=n-1){
+		if(read==READ)
+			memcpy(dst,ltail,sizeof(BYTE)*n);
+		else
+			memcpy(ltail,dst,sizeof(BYTE)*n);
+		ltail+=n;
+		dst+=n;
+		if(ltail>last)
+			ltail=stream;
+	}			
+	else{
+		if(read==READ)
+			memcpy(dst,ltail,sizeof(BYTE)*(last-ltail+1));
+		else
+			memcpy(ltail,dst,sizeof(BYTE)*(last-ltail+1));
+		ltail=stream;
+		n-=last-ltail+1;
+		dst+=last-ltail+1;
+		if(read==READ)
+			memcpy(dst,ltail,sizeof(BYTE)*n);
+		else
+			memcpy(ltail,dst,sizeof(BYTE)*n);
+		ltail+=n;
+		dst+=n;
+	}
+	return dst;
+}
+
 void bitstream::bareAlignedwrite(BYTE* buf,int len){
 	int n=len/BYTE_SIZE;
-	if(n>0){
-		if(tail<head || last-tail>=n-1){
-			memcpy(tail,buf,sizeof(BYTE)*n);
-			tail+=n;
-			buf+=n;
-			if(tail>last)
-				tail=stream;
-		}			
-		else{
-			memcpy(tail,buf,sizeof(BYTE)*(last-tail+1));
-			tail=stream;
-			n-=last-tail+1;
-			buf+=last-tail+1;
-			memcpy(tail,buf,sizeof(BYTE)*n);
-			tail+=n;
-			buf+=n;
-		}
-		length+=(len/BYTE_SIZE)*BYTE_SIZE;
-	}
+	if(n>0)
+		buf=alignedIterate(buf,n,WRITE);
+	length+=n*BYTE_SIZE;
 	if(len%BYTE_SIZE)
 	{
 		length+=len%BYTE_SIZE;
-		*tail=*buf & safemask(len%BYTE_SIZE);
+		*tail=lsb_as_lsb(buf,len%BYTE_SIZE);
 	}
 }
 int bitstream::trivialWrite(BYTE* buf,int len){
+	if(length>=BYTE_SIZE)
+		return 0;
+	headresidue=0;
 	if(length+len<=BYTE_SIZE){
-		*head=(*head & safemask(length))+ ((*buf & safemask(len))<<length);
-		headresidue=(len+length)%BYTE_SIZE;
-		tail=next(head);
+		BYTE d=lsb_as_lsb(buf,len);
+		*head=shift_for_residue(&d,length)+*head;
 		length+=len;
+		if(length==BYTE_SIZE)
+			inc_tail();
 		return 1;
 	}
+	headresidue=length;
+	if(length)
+		tail=next(head);
+	else
+		tail=head;
 	return 0;
 }
 void bitstream::writeBits(BYTE* buf,int len){
 	if(len<=0)
 		throw "Invalid write";
+	//trivialWrite must be called before anything
 	if(trivialWrite(buf,len))
 		return;
 	resize(len);
@@ -173,37 +220,12 @@ void bitstream::writeBits(BYTE* buf,int len){
 	if(residue)
 		throw "Can't write until aligned";
 	bareAlignedwrite(buf,len);
-	//if(residue)
-	//	while(len>0)
-	//		partialFetch(buf,residue,len);
-			/*if(len>BYTE_SIZE){
-				
-				inc_tail();
-				*tail=b>>(BYTE_SIZE-residue);
-			}
-			else{
-				BYTE b=*(buf);
-				length+=len;
-				len-=(BYTE_SIZE-residue);
-				*tail=((*tail)& safemask(residue))+(b<<residue);
-				if(len>0)
-				{
-					inc_tail();
-					*tail=b>>(BYTE_SIZE-residue);
-					len=0;
-				}
-				else if(len==0)
-					inc_tail();
-			}*/
-	//else
-	//{
-		
-	//}
 }
 
 void bitstream::writeUABits(BYTE* buf,int len){
 	if(len<=0)
 		throw "Invalid write";
+	//trivialWrite must be called before anything
 	if(trivialWrite(buf,len))
 		return;
 	resize(len);
@@ -220,11 +242,11 @@ void bitstream::writeUABits(BYTE* buf,int len){
 		}
 		if(len)
 		{
-			BYTE d=*buf & safemask(len);
-			*tail=(d<<residue)+*tail;
+			BYTE d=lsb_as_lsb(buf,len);
+			*tail=shift_for_residue(&d,residue)+*tail;
 			if(residue+len>BYTE_SIZE){
 				inc_tail();
-				*tail=(d>>BYTE_SIZE-residue)& safemask(residue);
+				*tail=overflown_in_residue(&d,residue);
 			}
 			else if(residue+len==BYTE_SIZE)
 				inc_tail();
@@ -233,67 +255,74 @@ void bitstream::writeUABits(BYTE* buf,int len){
 	}	
 }
 
+int bitstream::trivialRead(BYTE* buf,int len){
+	if(length>=BYTE_SIZE)
+		return 0;
+	if(length<BYTE_SIZE)
+	{
+		length-=len;
+		*buf=lsb_as_lsb(head,len);
+		*head=shiftout_lsb(head,len);
+		return 1;
+	}
+	return 0;
+}
 void bitstream::readBits(BYTE* buf,int len,int endian){
 	if(len>length || len<=0)
 		throw "Invalid read";
-	if(headresidue){
+	if(trivialRead(buf,len))
+		return;
+	if(endian && len%BYTE_SIZE)
+		throw "Ambiguous endianness";
+	int partial=0;
+	if(headresidue)
 		do{
 			if(len>=BYTE_SIZE){
 				*buf=*head;
 				inc_head();
 				partial_full_Copy(buf++,head,headresidue);
 				length-=BYTE_SIZE;
-				if(head==tail){
-					headresidue=0;
-					len-=BYTE_SIZE;
-					break;
-				}
 			}
 			else{
 				int tread=(len>headresidue)?headresidue:len;
-				*buf=*head & safemask(tread);
+				length-=tread;
+				*buf=lsb_as_lsb(head,tread);
 				headresidue-=tread;
 				len-=tread;
-				length-=tread;
 				if(!headresidue)
 					inc_head();
-				if(len)
-				{
-					*buf= ((*head & safemask(len)) << tread)+*buf;
-					length-=len;
-					len=0;
-					*head=(*head >> len) & safemask(BYTE_SIZE-len);
-					if(head==tail)
-						break;
-					headresidue=BYTE_SIZE-len;
-				}
+				else
+					shiftout_lsb(head,tread);
+				partial=tread;
+				break; //Crucial for the last if block
 			}
 		}while((len-=BYTE_SIZE)>0);
-	}
-	if(len>0 && !headresidue)
-		do{
-			if(len>=BYTE_SIZE){
-				*(buf++)=*head;
+
+	else if(len>=BYTE_SIZE)
+		if(endian){
+			buf=LEN_BYTE_IN(len)+buf;
+			do{
+				*(buf--)=*head;
 				inc_head();
 				length-=BYTE_SIZE;
-			}
-			else{
-				*(buf++)=(*head & safemask(len));
-				*head= (*head >> len) & safemask(BYTE_SIZE-len);
-				length-=len;
-				if(head==tail)
-					break;
-				headresidue=BYTE_SIZE-len;
-			}
-		}while((len-=BYTE_SIZE)>0);
-	
-	if(head==tail && length>0)
-	{
-		inc_tail();
-		int residue=RESIDUE();
-		if(!residue)
-			throw "Algoithmic error";
-		headresidue=residue;
+			}while((len-=BYTE_SIZE)>=BYTE_SIZE);
+		}
+		else{
+			int n=len/BYTE_SIZE;
+			buf=alignedIterate(buf,n,READ);
+			length-=n*BYTE_SIZE;
+			len-=n*BYTE_SIZE;
+		}
+	if(len){
+		BYTE d=lsb_as_lsb(head,len);
+		if(partial)
+			*buf= shift_for_residue(&d,partial)+*buf;
+		else
+			*buf=d;
+		shiftout_lsb(head,len);
+		length-=len;
+		headresidue=BYTE_SIZE-len;
+		length-=len;
 	}
 }
 
@@ -305,10 +334,12 @@ int main(){
 		bs.writeBits(&h,4);
 		bs.writeBits(&h,1);
 		bs.writeBits(&h,6);
-		bs.writeUABits(&h,3);*/
-		bs.writeBits(&h,7);
+		bs.writeBits(&h,3);*/
 		bs.writeBits(&h,2);
-		bs.align();
+		bs.writeBits(&h,7);
+		bs.readBits(&h,2,0);
+		bs.writeBits(&h,1);
+
 	}
 	catch (const char* c){
 		printf("%s\n",c);

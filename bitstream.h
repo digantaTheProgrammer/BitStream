@@ -34,6 +34,11 @@ class bitstream{
 		BYTE* pre(BYTE*);
 		BYTE* next(BYTE*);
 		void bareAlignedwrite(BYTE*,int);
+		void bareAlign();
 		int trivialWrite(BYTE*,int);
+		int trivialRead(BYTE*,int);
+		int RESIDUE();
+		int isAligned();
+		BYTE* alignedIterate(BYTE*,int,int);
 };
 #endif
