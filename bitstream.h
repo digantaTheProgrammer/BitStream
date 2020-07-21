@@ -3,8 +3,7 @@
 #include <memory.h>
 #include <stdlib.h>
 #define BYTE_SIZE 8
-#define BYTE char  //BYTE should have size in bits > BYTE_SIZE, also LSB BYTE_SIZE bits are considered as values (Order of bits : LSB->MSB)
-#define SYSTEM_ENDIAN 0
+#define BYTE char  //BYTE should have size in bits > BYTE_SIZE, also LSB BYTE_SIZE bits are considered as values. It does not guarantee that while reading, sizeinbits(BYTE)-BYTE_SIZE MSB bits will be set to zero. Also while writing, the buffer is corrupted
 #define BYTE_FULL 255 // Value of type BYTE such that all BYTE_SIZE LSB are set and all other bits unset
 #define INIT_CAP 1
 int LEN_BYTE_IN(int len){ return ((len/BYTE_SIZE)+((len % BYTE_SIZE)?0:-1));} //returns index offset in len bits

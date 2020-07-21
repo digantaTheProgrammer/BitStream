@@ -142,15 +142,8 @@ BYTE* bitstream::next(BYTE* b){
 #define READ 1
 #define WRITE 0
 BYTE* bitstream::alignedIterate(BYTE* dst,int n,int read){
-	BYTE* ltail,*lhead;
-	if(read==READ){
-		ltail=head;
-		lhead=tail;
-	}
-	else{
-		ltail=tail;
-		lhead=head;
-	}
+	BYTE* &ltail = (read==READ) ? head : tail;
+	BYTE* &lhead = (read==READ) ? tail : head;
 	if(ltail<lhead || last-ltail>=n-1){
 		if(read==READ)
 			memcpy(dst,ltail,sizeof(BYTE)*n);
@@ -258,15 +251,12 @@ void bitstream::writeUABits(BYTE* buf,int len){
 int bitstream::trivialRead(BYTE* buf,int len){
 	if(length>=BYTE_SIZE)
 		return 0;
-	if(length<BYTE_SIZE)
-	{
-		length-=len;
-		*buf=lsb_as_lsb(head,len);
-		*head=shiftout_lsb(head,len);
-		return 1;
-	}
-	return 0;
+	length-=len;
+	*buf=lsb_as_lsb(head,len);
+	*head=shiftout_lsb(head,len);
+	return 1;
 }
+
 void bitstream::readBits(BYTE* buf,int len,int endian){
 	if(len>length || len<=0)
 		throw "Invalid read";
@@ -292,7 +282,7 @@ void bitstream::readBits(BYTE* buf,int len,int endian){
 				if(!headresidue)
 					inc_head();
 				else
-					shiftout_lsb(head,tread);
+					*head=shiftout_lsb(head,tread);
 				partial=tread;
 				break; //Crucial for the last if block
 			}
@@ -319,30 +309,8 @@ void bitstream::readBits(BYTE* buf,int len,int endian){
 			*buf= shift_for_residue(&d,partial)+*buf;
 		else
 			*buf=d;
-		shiftout_lsb(head,len);
+		*head=shiftout_lsb(head,len);
 		length-=len;
 		headresidue=BYTE_SIZE-len;
-		length-=len;
 	}
-}
-
-int main(){
-	bitstream bs;
-	BYTE h=51;
-	try{
-		/*bs.writeBits(&h,2);
-		bs.writeBits(&h,4);
-		bs.writeBits(&h,1);
-		bs.writeBits(&h,6);
-		bs.writeBits(&h,3);*/
-		bs.writeBits(&h,2);
-		bs.writeBits(&h,7);
-		bs.readBits(&h,2,0);
-		bs.writeBits(&h,1);
-
-	}
-	catch (const char* c){
-		printf("%s\n",c);
-	}
-	return 0;
 }
